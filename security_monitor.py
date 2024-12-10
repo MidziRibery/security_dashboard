@@ -35,14 +35,14 @@ else:
 class SecurityMonitor:
     def __init__(self):
         self.packet_counts = defaultdict(int)
-        self.connection_history = defaultdict(lambda: deque(maxlen=1500))
+        self.connection_history = defaultdict(lambda: deque(maxlen=1000))
         self.suspicious_ips = set()
-        self.packet_queue = deque(maxlen=1500)
+        self.packet_queue = deque(maxlen=1000)
         self.stats = {'alerts': []}  # Initialize stats dictionary
         self.protocol_stats = defaultdict(int)
         self.filters = []
         self.capture_file = None
-        self.detailed_packets = deque(maxlen=1500)
+        self.detailed_packets = deque(maxlen=1000)
         
         try:
             # Configure Scapy for Npcap
@@ -78,7 +78,7 @@ class SecurityMonitor:
         # Size thresholds (in bytes)
         self.SIZE_THRESHOLDS = {
             'jumbo': 9000,        # Jumbo frame size
-            'suspicious': 1500,    # Standard MTU
+            'suspicious': 1000,    # Standard MTU
             'tiny': 64            # Minimum Ethernet frame
         }
         
@@ -436,7 +436,7 @@ class SecurityDashboard:
         self.root.configure(bg='#2b2b2b')
         self.root.geometry("1200x800")
         self._setup_ui()
-        self.root.after(1500, self._update_gui)
+        self.root.after(1000, self._update_gui)
 
     def _setup_ui(self):
         # Main container
@@ -660,7 +660,7 @@ class SecurityDashboard:
             self.detail_text.insert('1.0', packet.show(dump=True))
 
         # Schedule next update
-        self.root.after(1500, self._update_gui)
+        self.root.after(1000, self._update_gui)
 
     def run(self):
         """Start the dashboard"""
