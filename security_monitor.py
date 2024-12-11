@@ -32,17 +32,179 @@ else:
     def get_windows_if_list():
         raise NotImplementedError("get_windows_if_list is only available on Windows")
 
+# ml/threat_detection.py
+import os
+from sklearn.ensemble import IsolationForest, RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import joblib
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Any
+
+class ThreatDetectionEngine:
+    def __init__(self):
+        self.models = {
+            'anomaly': IsolationForest(contamination=0.1, random_state=42),
+            'classifier': RandomForestClassifier(n_estimators=100, random_state=42),
+            'behavior': IsolationForest(contamination=0.05, random_state=42)
+        }
+        self.scaler = StandardScaler()
+        self.feature_columns = [
+            'packet_size',
+            'protocol',
+            'flags',
+            'packet_rate',
+            'flow_duration',
+            'bytes_per_second',
+            'packets_per_second',
+            'avg_packet_size',
+            'port_entropy',
+            'ip_entropy'
+        ]
+        self._initialize_default_models()
+        
+    def _initialize_default_models(self):
+        """Initialize models and scaler with default values"""
+        # Create sample data
+        sample_data = pd.DataFrame({
+            'packet_size': [100, 200, 1500, 64, 1000],
+            'protocol': [6, 17, 1, 6, 17],
+            'flags': [1, 2, 0, 1, 2],
+            'packet_rate': [10, 20, 5, 15, 25],
+            'flow_duration': [1.0, 2.0, 0.5, 1.5, 2.5],
+            'bytes_per_second': [1000, 2000, 500, 1500, 2500],
+            'packets_per_second': [10, 20, 5, 15, 25],
+            'avg_packet_size': [100, 150, 200, 80, 160],
+            'port_entropy': [0.5, 0.7, 0.3, 0.6, 0.8],
+            'ip_entropy': [0.3, 0.4, 0.2, 0.5, 0.6]
+        })
+        
+        # Fit scaler with sample data
+        self.scaler.fit(sample_data)
+        
+        # Train models with basic labels
+        sample_labels = [0, 0, 1, 0, 1]  # 0: normal, 1: anomaly
+        
+        # Train models
+        self.models['anomaly'].fit(sample_data)
+        self.models['classifier'].fit(sample_data, sample_labels)
+        self.models['behavior'].fit(sample_data)
+        
+        # Save initialized models
+        os.makedirs('models', exist_ok=True)
+        for name, model in self.models.items():
+            joblib.dump(model, f'models/{name}_model.pkl')
+        joblib.dump(self.scaler, 'models/scaler.pkl')
+        
+    def extract_features(self, packet: Dict) -> pd.DataFrame:
+        """Extract ML features from packet data"""
+        features = {
+            'packet_size': len(packet),
+            'protocol': hash(packet.get('protocol', 0)) % 100,  # Protocol encoding
+            'flags': len(packet.get('flags', [])),
+            'packet_rate': packet.get('packet_rate', 0),
+            'flow_duration': packet.get('flow_duration', 0),
+            'bytes_per_second': packet.get('bytes_per_second', 0),
+            'packets_per_second': packet.get('packets_per_second', 0),
+            'avg_packet_size': packet.get('avg_packet_size', 0),
+            'port_entropy': self._calculate_entropy(packet.get('ports', [])),
+            'ip_entropy': self._calculate_entropy(packet.get('ips', []))
+        }
+        return pd.DataFrame([features])
+        
+    def _calculate_entropy(self, values: List) -> float:
+        """Calculate Shannon entropy for a list of values"""
+        if not values:
+            return 0.0
+        value_counts = pd.Series(values).value_counts(normalize=True)
+        return -(value_counts * np.log2(value_counts)).sum()
+        
+    def predict_threat(self, packet: Dict) -> Dict[str, Any]:
+        """Predict threat level for a packet"""
+        features = self.extract_features(packet)
+        scaled_features = self.scaler.transform(features)
+        
+        predictions = {
+            'anomaly_score': self.models['anomaly'].score_samples(scaled_features)[0],
+            'classification': self.models['classifier'].predict(scaled_features)[0],
+            'behavior_score': self.models['behavior'].score_samples(scaled_features)[0]
+        }
+        
+        threat_score = self._calculate_threat_score(predictions)
+        return {
+            **predictions,
+            'threat_score': threat_score,
+            'is_threat': threat_score > 0.7
+        }
+        
+    def _calculate_threat_score(self, predictions: Dict) -> float:
+        """Calculate overall threat score"""
+        weights = {
+            'anomaly': 0.4,
+            'classification': 0.4,
+            'behavior': 0.2
+        }
+        
+        score = (
+            weights['anomaly'] * (1 - np.exp(predictions['anomaly_score'])) +
+            weights['classification'] * float(predictions['classification']) +
+            weights['behavior'] * (1 - np.exp(predictions['behavior_score']))
+        )
+        return float(score)
+        
+    def train(self, training_data: pd.DataFrame) -> None:
+        """Train ML models with labeled data"""
+        X = training_data[self.feature_columns]
+        y = training_data['is_threat']
+        
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+        
+        # Scale features
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
+        
+        # Train models
+        self.models['anomaly'].fit(X_train_scaled)
+        self.models['classifier'].fit(X_train_scaled, y_train)
+        self.models['behavior'].fit(X_train_scaled)
+        
+        # Save models
+        self._save_models()
+        
+    def _save_models(self) -> None:
+        """Save trained models to disk"""
+        for name, model in self.models.items():
+            joblib.dump(model, f'models/{name}_model.pkl')
+        joblib.dump(self.scaler, 'models/scaler.pkl')
+        
+    def load_models(self) -> None:
+        """Load trained models from disk"""
+        for name in self.models.keys():
+            model_path = f'models/{name}_model.pkl'
+            if os.path.exists(model_path):
+                self.models[name] = joblib.load(model_path)
+            else:
+                print(f"Model {name} not found, using default initialization")
+                
+        scaler_path = 'models/scaler.pkl'
+        if os.path.exists(scaler_path):
+            self.scaler = joblib.load(scaler_path)
+        else:
+            print("Scaler not found, using default initialization")
+
 class SecurityMonitor:
     def __init__(self):
         self.packet_counts = defaultdict(int)
-        self.connection_history = defaultdict(lambda: deque(maxlen=1000))
+        self.connection_history = defaultdict(lambda: deque(maxlen=2000))
         self.suspicious_ips = set()
-        self.packet_queue = deque(maxlen=1000)
+        self.packet_queue = deque(maxlen=2000)
         self.stats = {'alerts': []}  # Initialize stats dictionary
         self.protocol_stats = defaultdict(int)
         self.filters = []
         self.capture_file = None
-        self.detailed_packets = deque(maxlen=1000)
+        self.detailed_packets = deque(maxlen=2000)
         
         try:
             # Configure Scapy for Npcap
@@ -84,6 +246,15 @@ class SecurityMonitor:
         
         # Platform-specific interface handling
         self.platform = platform.system()
+        
+        # Add to existing init
+        self.threat_detector = ThreatDetectionEngine()
+        try:
+            self.threat_detector.load_models()
+        except FileNotFoundError:
+            print("Models not found, initializing with default values...")
+            # Train with sample data or use default models
+            self.threat_detector._initialize_default_models()
         
     def start_capture(self):
         """Start packet capture in a separate thread"""
@@ -160,6 +331,23 @@ class SecurityMonitor:
                 'size_anomaly': packet_size > self.SIZE_THRESHOLDS['suspicious']
             }
             
+            # Add to existing packet callback
+            if packet.haslayer(scapy.IP):
+                packet_data = self._prepare_packet_data(packet)
+                threat_analysis = self.threat_detector.predict_threat(packet_data)
+                
+                if threat_analysis['is_threat']:
+                    self._generate_alert(
+                        message=f"ML-detected threat (score: {threat_analysis['threat_score']:.2f})",
+                        severity=AlertSeverity.HIGH if threat_analysis['threat_score'] > 0.9 
+                                else AlertSeverity.MEDIUM,
+                        category="ML_THREAT",
+                        details={
+                            'packet_info': packet_data,
+                            'threat_analysis': threat_analysis
+                        }
+                    )
+            
     def _check_suspicious_activity(self, ip_src, packet_info):
         """Analyze packets for suspicious patterns"""
         # Check for high packet rates
@@ -230,6 +418,68 @@ class SecurityMonitor:
             except:
                 continue
         return False
+
+    def _prepare_packet_data(self, packet):
+        """Prepare packet data for ML analysis"""
+        return {
+            'size': len(packet),
+            'protocol': packet[IP].proto if IP in packet else 0,
+            'flags': self._extract_flags(packet),
+            'packet_rate': self._calculate_packet_rate(),
+            'flow_duration': self._calculate_flow_duration(packet),
+            'bytes_per_second': self._calculate_bytes_per_second(),
+            'packets_per_second': self._calculate_packets_per_second(),
+            'avg_packet_size': self._calculate_avg_packet_size(),
+            'ports': self._extract_ports(packet),
+            'ips': [packet[IP].src, packet[IP].dst] if IP in packet else []
+        }
+
+    def _extract_flags(self, packet):
+        """Extract flags from packet"""
+        flags = []
+        if 'TCP' in packet:
+            flags = [flag for flag in packet['TCP'].flags]
+        return flags
+
+    def _calculate_packet_rate(self):
+        """Calculate current packet rate"""
+        return len(self.packet_queue) / 60  # packets per minute
+
+    def _calculate_flow_duration(self, packet):
+        """Calculate flow duration"""
+        if not self.packet_queue:
+            return 0
+        return time.time() - self.packet_queue[0]['timestamp']
+
+    def _calculate_bytes_per_second(self):
+        """Calculate bytes per second"""
+        if not self.packet_queue:
+            return 0
+        total_bytes = sum(len(p) for p in self.packet_queue)
+        duration = self._calculate_flow_duration(None)
+        return total_bytes / duration if duration > 0 else 0
+
+    def _calculate_packets_per_second(self):
+        """Calculate packets per second"""
+        if not self.packet_queue:
+            return 0
+        duration = self._calculate_flow_duration(None)
+        return len(self.packet_queue) / duration if duration > 0 else 0
+
+    def _calculate_avg_packet_size(self):
+        """Calculate average packet size"""
+        if not self.packet_queue:
+            return 0
+        return sum(len(p) for p in self.packet_queue) / len(self.packet_queue)
+
+    def _extract_ports(self, packet):
+        """Extract ports from packet"""
+        ports = []
+        if 'TCP' in packet:
+            ports.extend([packet['TCP'].sport, packet['TCP'].dport])
+        elif 'UDP' in packet:
+            ports.extend([packet['UDP'].sport, packet['UDP'].dport])
+        return ports
 
 # Alert Severity Levels
 class AlertSeverity(Enum):
@@ -436,7 +686,7 @@ class SecurityDashboard:
         self.root.configure(bg='#2b2b2b')
         self.root.geometry("1200x800")
         self._setup_ui()
-        self.root.after(1000, self._update_gui)
+        self.root.after(2000, self._update_gui)
 
     def _setup_ui(self):
         # Main container
@@ -660,7 +910,7 @@ class SecurityDashboard:
             self.detail_text.insert('1.0', packet.show(dump=True))
 
         # Schedule next update
-        self.root.after(1000, self._update_gui)
+        self.root.after(2000, self._update_gui)
 
     def run(self):
         """Start the dashboard"""
