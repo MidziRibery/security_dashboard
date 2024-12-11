@@ -43,17 +43,11 @@ from typing import Dict, List, Any
 
 class ThreatDetectionEngine:
     def __init__(self):
-        self.models = {
-            'anomaly': IsolationForest(contamination=0.1, random_state=42),
-            'classifier': RandomForestClassifier(n_estimators=100, random_state=42),
-            'behavior': IsolationForest(contamination=0.05, random_state=42)
-        }
-        self.scaler = StandardScaler()
         self.feature_columns = [
             'packet_size',
             'protocol',
             'flags',
-            'packet_rate',
+            'packet_rate', 
             'flow_duration',
             'bytes_per_second',
             'packets_per_second',
@@ -61,8 +55,55 @@ class ThreatDetectionEngine:
             'port_entropy',
             'ip_entropy'
         ]
+        self.models = {
+            'anomaly': IsolationForest(contamination=0.1, random_state=42),
+            'classifier': RandomForestClassifier(n_estimators=100, random_state=42),
+            'behavior': IsolationForest(contamination=0.05, random_state=42)
+        }
+        self.scaler = StandardScaler()
         self._initialize_default_models()
+
+    def extract_features(self, packet: Dict) -> pd.DataFrame:
+        """Extract features ensuring consistent column names"""
+        data = []
+        features = {col: 0 for col in self.feature_columns}  # Initialize with zeros
         
+        # Update with actual values
+        features.update({
+            'packet_size': len(packet),
+            'protocol': hash(packet.get('protocol', 0)) % 100,
+            'flags': len(packet.get('flags', [])),
+            'packet_rate': packet.get('packet_rate', 0),
+            'flow_duration': packet.get('flow_duration', 0),
+            'bytes_per_second': packet.get('bytes_per_second', 0),
+            'packets_per_second': packet.get('packets_per_second', 0),
+            'avg_packet_size': packet.get('avg_packet_size', 0),
+            'port_entropy': self._calculate_entropy(packet.get('ports', [])),
+            'ip_entropy': self._calculate_entropy(packet.get('ips', []))
+        })
+        data.append(features)
+        return pd.DataFrame(data, columns=self.feature_columns)
+
+    def predict_threat(self, packet: Dict) -> Dict[str, Any]:
+        """Predict threat ensuring feature names match"""
+        features_df = self.extract_features(packet)
+        assert all(col in features_df.columns for col in self.feature_columns), "Missing features"
+        
+        scaled_features = self.scaler.transform(features_df)
+        scaled_df = pd.DataFrame(scaled_features, columns=self.feature_columns)
+        
+        predictions = {
+            'anomaly_score': self.models['anomaly'].score_samples(scaled_df)[0],
+            'classification': self.models['classifier'].predict(scaled_df)[0],
+            'behavior_score': self.models['behavior'].score_samples(scaled_df)[0]
+        }
+        
+        return {
+            **predictions,
+            'threat_score': self._calculate_threat_score(predictions),
+            'is_threat': self._calculate_threat_score(predictions) > 0.7
+        }
+
     def _initialize_default_models(self):
         """Initialize models and scaler with default values"""
         # Create sample data
@@ -96,46 +137,12 @@ class ThreatDetectionEngine:
             joblib.dump(model, f'models/{name}_model.pkl')
         joblib.dump(self.scaler, 'models/scaler.pkl')
         
-    def extract_features(self, packet: Dict) -> pd.DataFrame:
-        """Extract ML features from packet data"""
-        features = {
-            'packet_size': len(packet),
-            'protocol': hash(packet.get('protocol', 0)) % 100,  # Protocol encoding
-            'flags': len(packet.get('flags', [])),
-            'packet_rate': packet.get('packet_rate', 0),
-            'flow_duration': packet.get('flow_duration', 0),
-            'bytes_per_second': packet.get('bytes_per_second', 0),
-            'packets_per_second': packet.get('packets_per_second', 0),
-            'avg_packet_size': packet.get('avg_packet_size', 0),
-            'port_entropy': self._calculate_entropy(packet.get('ports', [])),
-            'ip_entropy': self._calculate_entropy(packet.get('ips', []))
-        }
-        return pd.DataFrame([features])
-        
     def _calculate_entropy(self, values: List) -> float:
         """Calculate Shannon entropy for a list of values"""
         if not values:
             return 0.0
         value_counts = pd.Series(values).value_counts(normalize=True)
         return -(value_counts * np.log2(value_counts)).sum()
-        
-    def predict_threat(self, packet: Dict) -> Dict[str, Any]:
-        """Predict threat level for a packet"""
-        features = self.extract_features(packet)
-        scaled_features = self.scaler.transform(features)
-        
-        predictions = {
-            'anomaly_score': self.models['anomaly'].score_samples(scaled_features)[0],
-            'classification': self.models['classifier'].predict(scaled_features)[0],
-            'behavior_score': self.models['behavior'].score_samples(scaled_features)[0]
-        }
-        
-        threat_score = self._calculate_threat_score(predictions)
-        return {
-            **predictions,
-            'threat_score': threat_score,
-            'is_threat': threat_score > 0.7
-        }
         
     def _calculate_threat_score(self, predictions: Dict) -> float:
         """Calculate overall threat score"""
