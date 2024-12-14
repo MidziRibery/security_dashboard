@@ -41,6 +41,6 @@ def main():
     }
 
     # Test with normal traffic
-    runner = TestDataRunner("sample_data/normal_traffic.pcap")
+    runner = TestDataRunner("sample_data/ddos_attack.pcap")
     runner.monitor.email_config = email_config  # Add email config
     runner.run_test()
