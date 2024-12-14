@@ -11,7 +11,9 @@ from datetime import datetime
 import platform
 from enum import Enum
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
+import smtplib
+from email.mime.text import MIMEText
 
 # Platform-specific interface handling
 if platform.system() == "Windows":
@@ -47,8 +49,9 @@ SIZE_THRESHOLDS = {
 }
 
 class SecurityMonitor:
-    def __init__(self):
+    def __init__(self, email_config: Optional[Dict] = None):
         self.packet_counts = defaultdict(int)
+        self.email_config = email_config
         self.connection_history = defaultdict(lambda: deque(maxlen=2000))
         self.suspicious_ips = set()
         self.packet_queue = deque(maxlen=2000)
@@ -153,6 +156,21 @@ class SecurityMonitor:
         alert = f"[{timestamp}] {message}"
         self.stats['alerts'].append(alert)
         print(alert)  # Immediate console output
+        
+        # Send email alert if configured
+        if self.email_config:
+            try:
+                msg = MIMEText(alert)
+                msg['Subject'] = 'Security Alert'
+                msg['From'] = self.email_config['from']
+                msg['To'] = self.email_config['to']
+                
+                with smtplib.SMTP(self.email_config['smtp_server'], self.email_config['smtp_port']) as server:
+                    server.starttls()
+                    server.login(self.email_config['username'], self.email_config['password'])
+                    server.send_message(msg)
+            except Exception as e:
+                print(f"Failed to send email alert: {e}")
 
     def save_capture(self, filename):
         """Save packet capture to file"""
