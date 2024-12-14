@@ -11,7 +11,7 @@ class SecurityDashboard:
         self.root.title("Network Security Monitoring Dashboard")
         self.root.geometry("1200x800")
         self._setup_ui()
-        self.root.after(2000, self._update_gui)  # Periodic GUI updates
+        self.root.after(1000, self._update_gui)  # Periodic GUI updates
 
     def _setup_ui(self):
         # Main container
@@ -118,7 +118,7 @@ class SecurityDashboard:
             ))
 
         # Schedule the next update
-        self.root.after(2000, self._update_gui)
+        self.root.after(1000, self._update_gui)
 
     def run(self):
         """Start the dashboard"""

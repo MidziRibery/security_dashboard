@@ -52,14 +52,24 @@ class SecurityMonitor:
     def __init__(self, email_config: Optional[Dict] = None):
         self.packet_counts = defaultdict(int)
         self.email_config = email_config
-        self.connection_history = defaultdict(lambda: deque(maxlen=2000))
+        self.connection_history = defaultdict(lambda: deque(maxlen=20000))
         self.suspicious_ips = set()
-        self.packet_queue = deque(maxlen=2000)
+        self.packet_queue = deque(maxlen=20000)
         self.stats = {'alerts': []}  # Initialize stats dictionary
         self.protocol_stats = defaultdict(int)
         self.filters = []
-        self.detailed_packets = deque(maxlen=2000)
+        self.detailed_packets = deque(maxlen=20000)
         self.platform = platform.system()
+        
+        # PPS monitoring
+        self.pps_history = deque(maxlen=30)  # 3 minutes of per-second data
+        self.last_pps_check = time.time()
+        self.last_alert_time = defaultdict(float)
+        self.PPS_THRESHOLDS = {
+            'LOW': (100, 200),
+            'MODERATE': (300, 500),
+            'CRITICAL': 600
+        }
 
         # Initialize size tracking
         self.size_stats = {
@@ -133,6 +143,7 @@ class SecurityMonitor:
             self.packet_queue.append(packet_info)
             self._check_suspicious_activity(ip_src, packet_info)
             self._update_size_stats(len(packet))
+            self._check_pps_thresholds()
 
     def _check_suspicious_activity(self, ip_src, packet_info):
         """Analyze packets for suspicious patterns"""
@@ -150,7 +161,41 @@ class SecurityMonitor:
         size_range = (packet_size // 100) * 100
         self.size_stats['size_distribution'][size_range] += 1
 
-    def _generate_alert(self, message):
+    def _check_pps_thresholds(self):
+        """Monitor packets per second and trigger alerts based on thresholds"""
+        current_time = time.time()
+        
+        # Calculate current PPS
+        recent_packets = sum(1 for p in self.packet_queue if current_time - p['timestamp'] <= 1.0)
+        self.pps_history.append(recent_packets)
+        
+        # Only check every second
+        if current_time - self.last_pps_check < 1.0:
+            return
+        self.last_pps_check = current_time
+        
+        # Calculate average PPS over 3 minutes
+        if len(self.pps_history) >= 180:  # 3 minutes of data
+            avg_pps = sum(self.pps_history) / len(self.pps_history)
+            
+            # Check thresholds
+            if avg_pps >= self.PPS_THRESHOLDS['CRITICAL']:
+                if current_time - self.last_alert_time['CRITICAL'] > 180:  # Alert every 3 minutes
+                    self._generate_alert(f"CRITICAL: Extremely high traffic detected! Average PPS: {avg_pps:.0f}", 
+                                      severity=AlertSeverity.CRITICAL)
+                    self.last_alert_time['CRITICAL'] = current_time
+            elif self.PPS_THRESHOLDS['MODERATE'][0] <= avg_pps <= self.PPS_THRESHOLDS['MODERATE'][1]:
+                if current_time - self.last_alert_time['MODERATE'] > 180:
+                    self._generate_alert(f"MODERATE: High traffic levels detected. Average PPS: {avg_pps:.0f}", 
+                                      severity=AlertSeverity.MEDIUM)
+                    self.last_alert_time['MODERATE'] = current_time
+            elif self.PPS_THRESHOLDS['LOW'][0] <= avg_pps <= self.PPS_THRESHOLDS['LOW'][1]:
+                if current_time - self.last_alert_time['LOW'] > 180:
+                    self._generate_alert(f"WARNING: Elevated traffic levels. Average PPS: {avg_pps:.0f}", 
+                                      severity=AlertSeverity.LOW)
+                    self.last_alert_time['LOW'] = current_time
+
+    def _generate_alert(self, message, severity=AlertSeverity.MEDIUM):
         """Generate security alert"""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         alert = f"[{timestamp}] {message}"
@@ -161,7 +206,7 @@ class SecurityMonitor:
         if self.email_config:
             try:
                 msg = MIMEText(alert)
-                msg['Subject'] = 'Security Alert'
+                msg['Subject'] = f'Security Alert - {severity.value.upper()}'
                 msg['From'] = self.email_config['from']
                 msg['To'] = self.email_config['to']
                 
