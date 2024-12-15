@@ -52,13 +52,13 @@ class SecurityMonitor:
     def __init__(self, email_config: Optional[Dict] = None):
         self.packet_counts = defaultdict(int)
         self.email_config = email_config
-        self.connection_history = defaultdict(lambda: deque(maxlen=20000))
+        self.connection_history = defaultdict(lambda: deque(maxlen=100000))
         self.suspicious_ips = set()
-        self.packet_queue = deque(maxlen=20000)
+        self.packet_queue = deque(maxlen=100000)
         self.stats = {'alerts': []}  # Initialize stats dictionary
         self.protocol_stats = defaultdict(int)
         self.filters = []
-        self.detailed_packets = deque(maxlen=20000)
+        self.detailed_packets = deque(maxlen=100000)
         self.platform = platform.system()
         
         # PPS monitoring
