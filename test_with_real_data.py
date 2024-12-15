@@ -30,13 +30,17 @@ class TestDataRunner:
         self.dashboard.run()
 
 def main():
-    # Use real PCAP files
-    test_files = [
-        "sample_data/normal_traffic.pcap",  # Normal traffic
-        "sample_data/port_scan.pcap",       # Port scan attack
-        "sample_data/ddos.pcap"            # DDoS attack
-    ]
-    
-    for test_file in test_files:
-        runner = TestDataRunner(test_file)
-        runner.run_test()
+    # Email configuration for testing
+    email_config = {
+        'smtp_server': 'smtp.gmail.com',
+        'smtp_port': 587,
+        'username': 'hackathon598@gmail.com',
+        'password': '4orth3c0in',  # Use App Password from Google Account
+        'from': 'hackathon598@gmail.com',
+        'to': 'hackathon598@gmail.com'
+    }
+
+    # Test with normal traffic
+    runner = TestDataRunner("sample_data/ddos_attack.pcap")
+    runner.monitor.email_config = email_config  # Add email config
+    runner.run_test()
