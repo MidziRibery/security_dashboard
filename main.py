@@ -12,7 +12,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == '--test':
         # Run with test PCAP file
         print("Running with test PCAP file...")
-        runner = TestDataRunner("sample_data/ddos_attack.pcap")
+        runner = TestDataRunner("sample_data/ddos_attack_10000.pcap")
         runner.run_test()
     else:
         # Start live packet capture
